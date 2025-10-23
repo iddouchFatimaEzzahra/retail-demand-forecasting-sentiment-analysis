@@ -1,0 +1,16 @@
+artifact_uri: mlflow-artifacts:/0/a8536f5f3b1848c384321d5cf7493152/artifacts
+deleted_time: 1747746549329
+end_time: 1747697652219
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: deleted
+run_id: a8536f5f3b1848c384321d5cf7493152
+run_name: Global_Metrics
+run_uuid: a8536f5f3b1848c384321d5cf7493152
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1747697651937
+status: 3
+tags: []
+user_id: airflow

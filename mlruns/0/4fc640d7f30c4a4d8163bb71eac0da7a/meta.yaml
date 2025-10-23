@@ -1,0 +1,16 @@
+artifact_uri: mlflow-artifacts:/0/4fc640d7f30c4a4d8163bb71eac0da7a/artifacts
+deleted_time: 1748616286566
+end_time: 1748614428935
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: deleted
+run_id: 4fc640d7f30c4a4d8163bb71eac0da7a
+run_name: Prophet_P003_S009
+run_uuid: 4fc640d7f30c4a4d8163bb71eac0da7a
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1748614428627
+status: 3
+tags: []
+user_id: airflow

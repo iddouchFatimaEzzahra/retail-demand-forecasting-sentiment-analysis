@@ -1,0 +1,8 @@
+# Ignore large datasets
+data/training.1600000.processed.noemoticon.csv
+synthetic_retail_sales_enhanced.csv
+*.log
+*.pkl
+__pycache__/
+.DS_Store
+*.pbix

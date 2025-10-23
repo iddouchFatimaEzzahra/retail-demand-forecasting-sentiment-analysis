@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      retries: 5
+
+  airflow-webserver:
+    build: .
+    restart: always
+    depends_on:
+      - postgres
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+      - PYTHONPATH=/opt/airflow:/opt/airflow/kafka-retail
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./tests:/opt/airflow/tests
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./producer:/opt/airflow/producer
+      - ./spark_aggregator.py:/opt/airflow/spark_aggregator.py
+      - ./model_prophet.py:/opt/airflow/model_prophet.py
+      - ./synthetic_retail_sales_enhanced.csv:/opt/airflow/synthetic_retail_sales_enhanced.csv
+      - /var/run/docker.sock:/var/run/docker.sock   # <--- AJOUTE CETTE LIGNE
+    ports:
+      - "8080:8080"
+    command: webserver
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /opt/airflow/airflow-webserver.pid ]"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+  airflow-scheduler:
+    build: .
+    restart: always
+    depends_on:
+      - postgres
+      - airflow-webserver
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+      - PYTHONPATH=/opt/airflow:/opt/airflow/kafka-retail
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./producer:/opt/airflow/producer
+      - ./spark_aggregator.py:/opt/airflow/spark_aggregator.py
+      - ./model_prophet.py:/opt/airflow/model_prophet.py
+      - ./synthetic_retail_sales_enhanced.csv:/opt/airflow/synthetic_retail_sales_enhanced.csv
+      - /var/run/docker.sock:/var/run/docker.sock   # <--- AJOUTE CETTE LIGNE
+    command: scheduler
+
+volumes:
+  postgres-db-volume:

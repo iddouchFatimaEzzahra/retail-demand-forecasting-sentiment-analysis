@@ -1,0 +1,281 @@
+# .github/workflows/ci-cd.yml
+name: Demand Forecasting CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+env:
+  REGISTRY: ghcr.io 
+  PROJECT_NAME: cid_cd
+
+jobs:
+  # ===============================
+  # CONTINUOUS INTEGRATION
+  # ===============================
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_PASSWORD: airflow
+          POSTGRES_USER: airflow
+          POSTGRES_DB: airflow
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: manal
+          MYSQL_DATABASE: retail_forecast
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov flake8 black bandit
+    
+    - name: Code Quality Checks
+      run: |
+        Linting
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+        # Code formatting
+        black --check .
+        
+        # Security checks
+        bandit -r . -f json -o bandit-report.json || true
+    
+    - name: Test Spark Jobs
+      run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        pytest tests/test_spark_jobs.py -v --cov=spark/
+    
+    - name: Test Prophet Models
+      run: |
+        pytest tests/test_prophet_model.py -v --cov=ml/
+    
+    - name: Test Airflow DAGs
+      run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        export AIRFLOW_HOME=$(pwd)/airflow
+        pytest tests/test_airflow_dags.py -v
+    
+    - name: Integration Tests
+      run: |
+        # Test complet de la pipeline sur un échantillon
+        python tests/integration_test.py
+    
+    - name: Upload Coverage Reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+
+  # ===============================
+  # BUILD DOCKER IMAGES
+  # ===============================
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        service: [airflow, spark, ml]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository_owner }}/${{ env.PROJECT_NAME }}-${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+        labels: |
+          org.opencontainers.image.source=${{ github.repository_url }}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # ===============================
+  # DEPLOY TO STAGING
+  # ===============================
+  deploy-staging:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        docker-compose --version  # Verify installation
+
+    - name: Deploy to Staging
+      run: |
+        # Déploiement sur environnement de staging
+        docker-compose -f docker-compose.staging.yml down
+        docker-compose -f docker-compose.staging.yml pull
+        docker-compose -f docker-compose.staging.yml up -d
+    
+    #- name: Health Check
+      #run: |
+        # Vérification que tous les services sont up
+        #sleep 30
+        #curl -f http://localhost:8080/health || exit 1
+    - name: Install Python Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install \
+          pandas \
+          prophet \
+          scikit-learn \
+          mlflow \
+          kafka-python \
+          sqlalchemy \
+          numpy \
+          matplotlib  # Required by prophet
+        pip install plotly --quiet || echo "Plotly optional for CI"
+        pip list  # Verify installations 
+
+    - name: MLOps Smoke Tests
+      run: |
+        python tests/smoke_mlops.py --env=staging
+      env:
+        PROPHET_LOG_LEVEL: ERROR
+        CMDSTAN_LOG_LEVEL: ERROR
+
+    - name: Generate MLOps Report
+      run: |
+        echo "MLOps Validation:" >> report.md
+        echo "- Prophet model updates verified: $(date)" >> report.md
+        echo "- Last training data: $(ls -l data/raw/ | tail -n 1)" >> report.md
+        echo "artifact: report.md" >> $GITHUB_STEP_SUMMARY
+
+  # ===============================
+  # DEPLOY TO PRODUCTION
+  # ===============================
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Backup Production Data
+      run: |
+        # Backup MySQL avant déploiement
+        docker exec mysql mysqldump -u root -proot forecasting > backup_$(date +%Y%m%d_%H%M%S).sql
+    
+    - name: Deploy to Production
+      run: |
+        # Blue-Green deployment
+        docker-compose -f docker-compose.prod.yml up -d --scale airflow-webserver=2
+        
+        # Health check du nouveau container
+        sleep 60
+        NEW_CONTAINER=$(docker ps -q --filter "name=airflow-webserver" | head -1)
+        curl -f http://localhost:8080/health || exit 1
+        
+        # Switch traffic et arrêt ancien container
+        docker-compose -f docker-compose.prod.yml up -d --scale airflow-webserver=1
+    
+    - name: Post-deployment Tests
+      run: |
+        python tests/production_tests.py
+    
+    - name: Notify Teams
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: 'Deployment to Production: ${{ job.status }}'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # ===============================
+  # MODEL MONITORING
+  # ===============================
+  model-monitoring:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+  
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check Model Performance
+      run: |
+        python ml/model_monitoring.py
+    
+    - name: MLflow Model Registry Update
+      run: |
+        python ml/update_model_registry.py
+    
+    - name: Alert on Model Drift
+      if: failure()
+      run: |
+        python scripts/send_alert.py --type="model_drift"

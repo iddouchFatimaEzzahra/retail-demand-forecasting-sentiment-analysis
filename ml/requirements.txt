@@ -1,0 +1,7 @@
+pandas
+numpy
+scikit-learn
+prophet
+mlflow
+kafka-python
+sqlalchemy

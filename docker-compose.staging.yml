@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # Airflow Service
+  airflow-webserver:
+    image: ghcr.io/manalhajjaji/demand-forecasting-airflow:${TAG:-main}
+    ports:
+      - "8080:8080"  # Airflow UI port
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    depends_on:
+      - postgres
+      - ml-service  # Wait for ML service to be ready
+
+  # Spark Service
+  spark-master:
+    image: ghcr.io/manalhajjaji/demand-forecasting-spark:${TAG:-main}
+    ports:
+      - "8081:8080"  # Spark UI port (different from Airflow)
+    depends_on:
+      - postgres
+
+  # ML Service
+  ml-service:
+    image: ghcr.io/manalhajjaji/demand-forecasting-ml:${TAG:-main}
+    ports:
+      - "5000:5000"  # Typical port for ML APIs (Flask/FastAPI)
+    environment:
+      - STAGING_MODE=true
+      - DB_URL=postgresql://airflow:airflow@postgres/airflow
+    volumes:
+      - ./ml/models:/models  # Mount trained models
+    depends_on:
+      - postgres
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"  # Expose PostgreSQL port for debugging
+
+volumes:
+  postgres_data:
